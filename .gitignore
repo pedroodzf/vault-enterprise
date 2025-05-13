@@ -12,3 +12,6 @@ init.sh
 *.tfstate.backup.json
 *.terraform.*
 *.pem
+utils/vault-ca
+.DS_Store
+vault-ca

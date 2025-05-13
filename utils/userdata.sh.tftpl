@@ -1,0 +1,101 @@
+#!/bin/bash
+
+echo "++++++ STARTING VAULT INIT SCRIPT ++++++"
+# Install utils
+apt install -y unzip jq
+
+# Get ec2 instance metadata
+TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 3600"`
+PUBLIC_HOSTNAME=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-hostname`
+PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4`
+LOCAL_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4`
+CLUSTER_NAME=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/tags/instance/Name`
+
+# Install Vault
+curl -fsSL -o /tmp/vault.zip https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_amd64.zip
+unzip -o -d /usr/local/bin/ /tmp/vault.zip
+sudo chown root:root /usr/local/bin/vault
+setcap cap_ipc_lock=+ep /usr/local/bin/vault
+setcap cap_net_bind_service=+ep /usr/local/bin/vault
+
+# Create groups and users
+useradd --system --home /etc/vault.d --shell /bin/false vault
+
+# Make directories and empty configuration files
+mkdir --parents /opt/instruqt
+mkdir --parents /etc/vault.d
+mkdir --parents /opt/vault/data
+mkdir --parents /opt/vault/tls
+
+# Create files.
+echo ${vault_service} | base64 --decode > /etc/systemd/system/vault.service
+echo ${vault_license} > /opt/vault/vault.hclic
+echo ${cert_gen_script} | base64 --decode > /tmp/cert-gen.sh
+echo ${ca_cert} | base64 --decode > /tmp/vault-ca.pem
+echo ${ca_key} | base64 --decode > /tmp/vault-ca.key
+
+# Generate certificates
+cd /tmp/
+chmod +x /tmp/cert-gen.sh
+./cert-gen.sh $LOCAL_IP $PUBLIC_IP
+cp /tmp/vault-cert.pem /opt/vault/tls/vault-cert.pem
+cp /tmp/vault-key.pem /opt/vault/tls/vault-key.pem
+cp /tmp/vault-ca.pem /opt/vault/tls/vault-ca.pem
+cp /tmp/vault-ca.pem /usr/local/share/ca-certificates/vault-ca.crt
+update-ca-certificates
+
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+cat << EOF > /etc/vault.d/vault.hcl
+ui = true
+
+cluster_addr  = "https://$LOCAL_IP:8201"
+api_addr      = "https://$PUBLIC_IP:8200"
+
+disable_mlock = true
+
+seal "awskms" {
+#   region     = "us-east-1"
+#    kms_key_id = "${kms_key_id}"
+#}
+
+storage "raft" {
+  path = "/opt/vault/data"
+  node_id = "$HOSTNAME"
+
+  retry_join {
+    auto_join = "provider=aws region=us-east-1 tag_key=Name tag_value=$CLUSTER_NAME addr_type=private_v4"
+    leader_ca_cert_file     = "/opt/vault/tls/vault-ca.pem"
+    leader_client_cert_file = "/opt/vault/tls/vault-cert.pem"
+    leader_client_key_file  = "/opt/vault/tls/vault-key.pem"
+  }
+  autopilot_redundancy_zone = "$(curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)"
+}
+
+# HTTPS listener
+listener "tcp" {
+  address            = "0.0.0.0:8200"
+  tls_cert_file      = "/opt/vault/tls/vault-cert.pem"
+  tls_key_file       = "/opt/vault/tls/vault-key.pem"
+  tls_client_ca_file = "/opt/vault/tls/vault-ca.pem"
+}
+
+# Enterprise license_path
+license_path = "/opt/vault/vault.hclic"
+EOF
+
+# Set file ownership and permissions
+chown --recursive vault:vault /opt/vault
+chown --recursive vault:vault /etc/vault.d
+chmod 640 /etc/vault.d/vault.hcl
+chown root:vault /opt/vault/vault.hclic
+chmod 0640 /opt/vault/vault.hclic
+chown root:root /opt/vault/tls/*.pem
+chown root:vault /opt/vault/tls/vault-key.pem
+chmod 0640 /opt/vault/tls/vault-key.pem
+chmod 0644 /opt/vault/tls/vault-cert.pem /opt/vault/tls/vault-ca.pem
+
+# Start and enable the Vault service
+systemctl enable vault.service
+systemctl start vault.service
+systemctl status vault.service

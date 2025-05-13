@@ -1,0 +1,10 @@
+# terraform.tfvars
+ec2_ssh_pub_key="nodes_key"
+region="us-east-2"
+vault_version ="1.19.1+ent"
+vault_cluster_instance_type = "m5.large"
+vault_cluster_min_size = 3
+vault_cluster_max_size = 3
+vault_cluster_desired_capacity = 3
+name_prefix = "vault-cluster"
+vault_enterprise_license = "<your_license_here>"

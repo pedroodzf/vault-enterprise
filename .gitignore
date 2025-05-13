@@ -1,0 +1,14 @@
+*/*.tfvars
+*.tfstate
+init.sh
+.terraform.tfstate
+.terraform
+.terraform/
+*.tfstate.backup
+*.tfvars
+*.tfstate.*
+*.tfvars.json
+*.tfstate.json
+*.tfstate.backup.json
+*.terraform.*
+*.pem
